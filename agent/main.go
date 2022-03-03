@@ -8,9 +8,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sivillakonski/firespotter/agent/adapter"
+	"github.com/sivillakonski/firespotter/agent/adapter/plow"
+	"github.com/sivillakonski/firespotter/shared/dto"
+
 	"github.com/go-resty/resty/v2"
-	"github.com/sivillakonski/firespotter/dto"
-	"github.com/sivillakonski/firespotter/plowjob"
 )
 
 var (
@@ -39,12 +41,23 @@ func main() {
 		lastOrderCancel func()
 	)
 
+	keepAliveCounter := 0
+
 	for currentOrder := range orders {
+		keepAliveCounter += 1
+
 		newOrderHash := fmt.Sprintf("%+v", currentOrder) // TODO: calculate hash based on values
 
 		if newOrderHash == lastOrderHash {
+			if keepAliveCounter%10 == 0 {
+				log.Printf("-> no new orders received, we are still processing the old one: %s\n", lastOrderHash)
+				keepAliveCounter = 0
+			}
+
 			continue
 		}
+
+		keepAliveCounter = 0
 
 		log.Printf("-> new order received: %s\n", newOrderHash)
 		lastOrderHash = newOrderHash
@@ -70,7 +83,7 @@ func main() {
 		lastOrderCancel = queue.Stop
 
 		for i := 0; i < workersNumber; i++ {
-			queue.Submit(plowjob.NewPlowJob(currentOrder[i].URL, *fireSpotterConnectionsPerTarget))
+			queue.Submit(plow.NewPlowJob(currentOrder[i].URL, *fireSpotterConnectionsPerTarget))
 		}
 	}
 }
@@ -101,26 +114,20 @@ func receiveOrders(orders chan []dto.Target) {
 	}
 }
 
-// Job - interface for job processing
-type Job interface {
-	Process()
-	Cancel()
-	FinishedSignal() chan struct{}
-}
 
 // Worker - the worker threads that actually process the jobs
 type Worker struct {
 	done             sync.WaitGroup
-	readyPool        chan chan Job
-	assignedJobQueue chan Job
+	readyPool        chan chan adapter.BenchmarkJob
+	assignedJobQueue chan adapter.BenchmarkJob
 
 	quit chan bool
 }
 
 // JobQueue - a queue for enqueueing jobs to be processed
 type JobQueue struct {
-	internalQueue     chan Job
-	readyPool         chan chan Job
+	internalQueue     chan adapter.BenchmarkJob
+	readyPool         chan chan adapter.BenchmarkJob
 	workers           []*Worker
 	dispatcherStopped sync.WaitGroup
 	workersStopped    sync.WaitGroup
@@ -130,13 +137,13 @@ type JobQueue struct {
 // NewJobQueue - creates a new job queue
 func NewJobQueue(maxWorkers int) *JobQueue {
 	workersStopped := sync.WaitGroup{}
-	readyPool := make(chan chan Job, maxWorkers)
+	readyPool := make(chan chan adapter.BenchmarkJob, maxWorkers)
 	workers := make([]*Worker, maxWorkers, maxWorkers)
 	for i := 0; i < maxWorkers; i++ {
 		workers[i] = NewWorker(readyPool, workersStopped)
 	}
 	return &JobQueue{
-		internalQueue:     make(chan Job),
+		internalQueue:     make(chan adapter.BenchmarkJob),
 		readyPool:         readyPool,
 		workers:           workers,
 		dispatcherStopped: sync.WaitGroup{},
@@ -178,16 +185,16 @@ func (q *JobQueue) dispatch() {
 }
 
 // Submit - adds a new job to be processed
-func (q *JobQueue) Submit(job Job) {
+func (q *JobQueue) Submit(job adapter.BenchmarkJob) {
 	q.internalQueue <- job
 }
 
 // NewWorker - creates a new worker
-func NewWorker(readyPool chan chan Job, done sync.WaitGroup) *Worker {
+func NewWorker(readyPool chan chan adapter.BenchmarkJob, done sync.WaitGroup) *Worker {
 	return &Worker{
 		done:             done,
 		readyPool:        readyPool,
-		assignedJobQueue: make(chan Job),
+		assignedJobQueue: make(chan adapter.BenchmarkJob),
 		quit:             make(chan bool),
 	}
 }
@@ -204,7 +211,7 @@ func (w *Worker) Start() {
 
 				select {
 				case <-job.FinishedSignal():
-					// That's fine, ready for a new Job
+					// That's fine, ready for a new BenchmarkJob
 				case <-w.quit:
 					job.Cancel()
 				}

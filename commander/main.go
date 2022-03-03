@@ -7,7 +7,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/sivillakonski/firespotter/dto"
+	"github.com/sivillakonski/firespotter/shared/dto"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,7 +17,7 @@ var (
 )
 
 func main() {
-	sourceFilePath := flag.String("source", "conf.json", "Source of mocked data")
+	sourceFilePath := flag.String("conf", "conf.json", "Source of mocked data")
 	flag.Parse()
 
 	var err error

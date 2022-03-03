@@ -1,4 +1,8 @@
-!plowjob
+commanderd
+agentd
+firespotter.tar.gz
+default-conf.json
+
 ### Diff template
 *.patch
 *.diff
